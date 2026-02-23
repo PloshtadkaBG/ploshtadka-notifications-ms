@@ -338,6 +338,50 @@ async def _handle_charge_refunded(charge) -> None:  # type: ignore[type-arg]
 
 
 # ---------------------------------------------------------------------------
+# POST /payments/{payment_id}/abandon
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{payment_id}/abandon", status_code=status.HTTP_200_OK)
+async def abandon_checkout(
+    payment_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    stripe_client: StripeClient = Depends(get_stripe_client),
+) -> dict:
+    """
+    Immediately expire a PENDING Stripe Checkout Session that the user
+    chose not to complete (e.g. clicked back).
+
+    This triggers the checkout.session.expired webhook, which marks the
+    payment as FAILED and cancels the booking via bookings-ms.
+    """
+    payment = await payment_crud.get_pending_by_id(payment_id)
+    if payment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending payment not found.",
+        )
+
+    is_admin = (
+        PaymentScope.ADMIN in current_user.scopes
+        or PaymentScope.ADMIN_WRITE in current_user.scopes
+    )
+    if not is_admin and payment.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only abandon your own payments.",
+        )
+
+    try:
+        stripe_client.checkout.sessions.expire(payment.stripe_session_id)
+    except stripe.InvalidRequestError:
+        # Session already expired or completed — webhook will handle the rest
+        pass
+
+    return {"abandoned": True}
+
+
+# ---------------------------------------------------------------------------
 # DELETE /payments/{payment_id}
 # ---------------------------------------------------------------------------
 

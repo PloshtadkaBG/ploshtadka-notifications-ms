@@ -39,6 +39,10 @@ class PaymentCRUD(CRUD[Payment, PaymentResponse]):  # type: ignore
         )
         return PaymentResponse.model_validate(inst) if inst else None
 
+    async def get_pending_by_id(self, payment_id: UUID) -> Payment | None:
+        """Return a PENDING payment by primary key, or None."""
+        return await Payment.get_or_none(id=payment_id, status=PaymentStatus.PENDING)
+
     async def get_by_session(self, session_id: str) -> Payment | None:
         """Return the raw model instance for internal webhook processing."""
         return await Payment.get_or_none(stripe_session_id=session_id)
