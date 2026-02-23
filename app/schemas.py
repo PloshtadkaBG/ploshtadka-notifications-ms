@@ -32,6 +32,7 @@ class PaymentResponse(BaseModel):
 
 class CheckoutRequest(BaseModel):
     booking_id: UUID
+    locale: str | None = None
 
 
 class CheckoutResponse(BaseModel):
