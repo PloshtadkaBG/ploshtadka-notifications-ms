@@ -2,9 +2,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ms_core import setup_app
-
 from loguru import logger
+from ms_core import setup_app
 
 from app.logging import setup_logging
 from app.settings import db_url, stripe_secret_key, stripe_webhook_secret
@@ -18,9 +17,7 @@ if stripe_secret_key in _PLACEHOLDER_KEYS or stripe_webhook_secret in _PLACEHOLD
         "Set real keys via environment variables before processing payments."
     )
 
-application = FastAPI(
-    title="ploshtadka-payments-ms",
-)
+application = FastAPI(title="ploshtadka-payments-ms", redirect_slashes=False)
 
 application.add_middleware(
     CORSMiddleware,
@@ -30,6 +27,4 @@ application.add_middleware(
     allow_headers=["*"],
 )
 
-tortoise_conf = setup_app(
-    application, db_url, Path("app") / "routers", ["app.models"]
-)
+tortoise_conf = setup_app(application, db_url, Path("app") / "routers", ["app.models"])
