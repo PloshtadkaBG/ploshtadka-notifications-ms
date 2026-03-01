@@ -1,6 +1,6 @@
-# CLAUDE.md — ploshtadka-payments-ms
+# CLAUDE.md — ploshtadka-notifications-ms
 
-FastAPI microservice for Stripe payment processing (part of the PloshtadkaBG platform).
+FastAPI microservice for sending emails via Resend (part of the PloshtadkaBG platform).
 
 ## Package management
 
@@ -16,17 +16,17 @@ uv run <command>       # run in the venv
 
 ```bash
 uv run pytest                                                        # run tests
-uv run uvicorn main:application --host 0.0.0.0 --port 8003          # dev server
+uv run uvicorn main:application --host 0.0.0.0 --port 8004          # dev server
 ```
 
 ## Architecture
 
 ### Technology Stack
 
-- **API Framework**: FastAPI with Uvicorn (port 8003)
+- **API Framework**: FastAPI with Uvicorn (port 8004)
 - **Database**: PostgreSQL with Tortoise ORM and Aerich migrations
-- **Payment provider**: Stripe (via `stripe` Python SDK, StripeClient v8+)
-- **Testing**: pytest with AsyncMock-based CRUD mocking (no real DB or Stripe in tests)
+- **Email provider**: Resend (via `resend` Python SDK)
+- **Testing**: pytest with AsyncMock-based CRUD mocking (no real DB or Resend calls in tests)
 
 ## Auth architecture — critical
 
@@ -40,104 +40,78 @@ Auth is delegated entirely to Traefik via `forwardAuth`. JWT validation happens 
 
 `get_current_user()` in `app/deps.py` reads these headers — it does not validate any token itself. **Do not add JWT validation middleware inside this service.**
 
-## Stripe integration
+## Email sending
 
-### Checkout flow
+This is an **internal service** — other microservices call `POST /notifications/send` over the Docker network to send emails. It uses Resend's Python SDK directly (no SMTP relay or mail server needed).
 
-1. Frontend POSTs to `POST /bookings/` on bookings-ms → booking created (PENDING)
-2. Frontend POSTs to `POST /payments/checkout` → payments-ms creates Stripe Checkout Session
-3. Frontend redirects customer to `checkout_url`
-4. Customer completes payment on Stripe-hosted page
-5. Stripe fires `checkout.session.completed` webhook → payment marked PAID
-6. Venue owner sees PENDING booking and confirms/cancels manually
-
-### Refund flow
-
-- When venue owner cancels a booking, bookings-ms calls `POST /payments/booking/{id}/refund`
-  forwarding the owner's auth headers → full Stripe refund issued
-- Customer cancellations do NOT trigger a refund (no-refund policy for customer cancellations)
-
-### Webhook security
-
-- `POST /payments/webhook` is declared PUBLIC in Traefik (no forwardAuth)
-- Every event is verified via `stripe_client.construct_event(raw_body, sig_header, secret)`
-- Never parse the body before verifying — always use `await request.body()` raw bytes
-- `STRIPE_WEBHOOK_SECRET` must match the signing secret in your Stripe Dashboard
-
-### Stripe client
+### How other services call it
 
 ```python
-from stripe import StripeClient
-client = StripeClient(api_key)        # v8+ API
-client.checkout.sessions.create(params={...})
-client.refunds.create(params={"payment_intent": pi_id})
-event = client.construct_event(raw_body, sig_header, webhook_secret)
+# From bookings-ms, payments-ms, etc.
+resp = await httpx_client.post(
+    "http://notifications-ms:8004/notifications/send",
+    json={
+        "to": "user@example.com",
+        "subject": "Booking Confirmed",
+        "html": "<h1>Your booking is confirmed!</h1>",
+        "template": "booking_confirmed",
+        "triggered_by": "bookings-ms",
+    },
+    headers=system_admin_headers,  # needs admin:notifications:write
+)
 ```
-
-## Cross-service calls
-
-payments-ms calls bookings-ms via `BookingsClient` in `app/deps.py` using the internal
-Docker network (`http://bookings-ms:8002`). It forwards caller headers for normal auth,
-or injects system admin headers (`_get_system_admin()`) for webhook-triggered cancellations.
 
 ## Project structure
 
 ```
 app/
-  settings.py          # DB_URL, BOOKINGS_MS_URL, STRIPE_* (all env vars)
-  models.py            # Tortoise ORM model: Payment + PaymentStatus
-  schemas.py           # Pydantic: PaymentResponse, CheckoutRequest, CheckoutResponse
-  crud.py              # PaymentCRUD — all DB operations
-  deps.py              # Auth deps, BookingsClient, get_stripe_client, scope checkers
-  scopes.py            # PaymentScope StrEnum + PAYMENT_SCOPE_DESCRIPTIONS
+  settings.py          # DB_URL, RESEND_API_KEY, DEFAULT_FROM_EMAIL
+  models.py            # Tortoise ORM model: Notification
+  schemas.py           # Pydantic: NotificationResponse, SendEmailRequest
+  crud.py              # NotificationCRUD — logs sent/failed emails
+  deps.py              # Auth deps, scope checkers
+  scopes.py            # NotificationScope StrEnum
   routers/
-    payments.py        # /payments endpoints
+    notifications.py   # /notifications endpoints
+    health.py          # /health/live, /health/ready
 tests/
-  conftest.py          # Fixtures: customer_client, owner_client, admin_client, anon_app, client_factory
-  factories.py         # make_customer(), make_venue_owner(), make_admin(), payment_response(), etc.
-  test_payments.py     # Full endpoint test suite
-  test_scopes.py       # Scope enum/description tests
+  conftest.py          # Fixtures: admin_client, anon_app, client_factory
+  factories.py         # make_user(), make_admin(), notification_response()
+  test_notifications.py
+  test_scopes.py
 ```
 
 ## Scopes
 
-| Scope                    | Who has it  | Purpose                                 |
-|--------------------------|-------------|-----------------------------------------|
-| `payments:read`          | Customer    | View own payment history                |
-| `admin:payments`         | Admin       | Super-scope                             |
-| `admin:payments:read`    | Admin       | Read any payment                        |
-| `admin:payments:write`   | Admin       | Modify / refund any payment             |
-| `admin:payments:delete`  | Admin       | Hard-delete any payment record          |
+| Scope                        | Who has it  | Purpose                           |
+|------------------------------|-------------|-----------------------------------|
+| `admin:notifications`        | Admin       | Super-scope                       |
+| `admin:notifications:read`   | Admin       | View notification history          |
+| `admin:notifications:write`  | Admin       | Send notifications (internal)      |
 
-## Payment status machine
+## Endpoints
 
-```
-PENDING  → PAID      (checkout.session.completed webhook)
-PENDING  → FAILED    (checkout.session.expired webhook)
-PAID     → REFUNDED  (refund endpoint or charge.refunded webhook)
-```
-
-Terminal states: `FAILED`, `REFUNDED`.
+| Method | Path                    | Scopes                       | Notes                        |
+|--------|-------------------------|------------------------------|------------------------------|
+| POST   | `/notifications/send`   | `admin:notifications:write`  | Send email via Resend        |
+| GET    | `/notifications/`       | `admin:notifications:read`   | List notification history    |
+| GET    | `/health/live`          | none                         | Liveness probe               |
+| GET    | `/health/ready`         | none                         | Readiness probe (DB check)   |
 
 ## Environment variables
 
-| Variable                          | Default                                     | Description                                    |
-|-----------------------------------|---------------------------------------------|------------------------------------------------|
-| `DB_URL`                          | `sqlite://:memory:`                         | Database connection string                     |
-| `BOOKINGS_MS_URL`                 | `http://localhost:8002`                     | Bookings microservice base URL                 |
-| `STRIPE_SECRET_KEY`               | `sk_test_placeholder`                       | Stripe secret key (test or live)               |
-| `STRIPE_WEBHOOK_SECRET`           | `whsec_placeholder`                         | Stripe webhook signing secret                  |
-| `STRIPE_SUCCESS_URL`              | `http://localhost/bookings?payment=success` | Frontend URL after successful payment          |
-| `STRIPE_CANCEL_URL`               | `http://localhost/bookings?payment=cancelled`| Frontend URL when customer cancels checkout   |
-| `STRIPE_CHECKOUT_EXPIRES_MINUTES` | `30`                                        | Minutes until Checkout Session expires         |
+| Variable             | Default                                      | Description                    |
+|----------------------|----------------------------------------------|--------------------------------|
+| `DB_URL`             | `sqlite://:memory:`                          | Database connection string     |
+| `RESEND_API_KEY`     | `re_test_placeholder`                        | Resend API key                 |
+| `DEFAULT_FROM_EMAIL` | `Ploshtadka.BG <noreply@ploshtadka.bg>`      | Sender address                 |
+| `FRONTEND_BASE_URL`  | `http://localhost`                           | Frontend URL for email links   |
 
 ## Testing conventions
 
-- **Mock the CRUD layer** with `AsyncMock` (`patch("app.routers.payments.payment_crud")`)
-- **Mock BookingsClient** via `client_factory(..., bookings_client=mock_bc)`
-- **Mock StripeClient** via `client_factory(..., stripe_client=mock_sc)`
+- **Mock the CRUD layer** with `AsyncMock` (`patch("app.routers.notifications.notification_crud")`)
+- **Mock `resend`** via `patch("app.routers.notifications.resend")`
 - Use `anon_app` for real scope/auth dep checks (422 assertions on missing headers)
-- Webhook tests: mock `stripe_client.construct_event` to return fake event objects
 
 ## Database
 

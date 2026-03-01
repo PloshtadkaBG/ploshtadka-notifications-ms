@@ -1,43 +1,39 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 
-class PaymentStatus(StrEnum):
-    PENDING = "pending"
-    PAID = "paid"
-    REFUNDED = "refunded"
+class NotificationChannel(StrEnum):
+    EMAIL = "email"
+
+
+class NotificationStatus(StrEnum):
+    SENT = "sent"
     FAILED = "failed"
 
 
-class PaymentResponse(BaseModel):
+class NotificationResponse(BaseModel):
     id: UUID
-    booking_id: UUID
-    user_id: UUID
-    venue_owner_id: UUID
-    stripe_session_id: str
-    stripe_payment_intent_id: str | None
-    amount: Decimal
-    currency: str
-    status: PaymentStatus
-    updated_at: datetime
+    channel: NotificationChannel
+    recipient: str
+    subject: str
+    template: str
+    status: NotificationStatus
+    resend_id: str | None
+    error: str | None
+    triggered_by: str | None
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class CheckoutRequest(BaseModel):
-    booking_id: UUID
-    locale: str | None = None
-
-
-class CheckoutResponse(BaseModel):
-    """Returned to the frontend after creating a Checkout Session."""
-
-    checkout_url: str
-    session_id: str
-    payment_id: UUID
+class SendEmailRequest(BaseModel):
+    to: str
+    subject: str
+    html: str
+    template: str = "generic"
+    triggered_by: str | None = None

@@ -1,101 +1,59 @@
 from __future__ import annotations
 
-from decimal import Decimal
-from uuid import UUID
-
 from ms_core import CRUD
 
-from app.models import Payment, PaymentStatus
-from app.schemas import PaymentResponse
+from app.models import Notification, NotificationStatus
+from app.schemas import NotificationResponse
 
 
-class PaymentCRUD(CRUD[Payment, PaymentResponse]):  # type: ignore
-    async def create(
+class NotificationCRUD(CRUD[Notification, NotificationResponse]):  # type: ignore
+    async def log_sent(
         self,
         *,
-        booking_id: UUID,
-        user_id: UUID,
-        venue_owner_id: UUID,
-        stripe_session_id: str,
-        amount: Decimal,
-        currency: str,
-    ) -> PaymentResponse:
-        inst = await Payment.create(
-            booking_id=booking_id,
-            user_id=user_id,
-            venue_owner_id=venue_owner_id,
-            stripe_session_id=stripe_session_id,
-            amount=amount,
-            currency=currency,
+        recipient: str,
+        subject: str,
+        template: str,
+        resend_id: str,
+        triggered_by: str | None = None,
+    ) -> NotificationResponse:
+        inst = await Notification.create(
+            recipient=recipient,
+            subject=subject,
+            template=template,
+            status=NotificationStatus.SENT,
+            resend_id=resend_id,
+            triggered_by=triggered_by,
         )
-        return PaymentResponse.model_validate(inst)
+        return NotificationResponse.model_validate(inst)
 
-    async def get_by_booking_paid(self, booking_id: UUID) -> PaymentResponse | None:
-        """Return the most recent PAID payment for a booking, or None."""
-        inst = (
-            await Payment.filter(booking_id=booking_id, status=PaymentStatus.PAID)
-            .order_by("-created_at")
-            .first()
+    async def log_failed(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        template: str,
+        error: str,
+        triggered_by: str | None = None,
+    ) -> NotificationResponse:
+        inst = await Notification.create(
+            recipient=recipient,
+            subject=subject,
+            template=template,
+            status=NotificationStatus.FAILED,
+            error=error,
+            triggered_by=triggered_by,
         )
-        return PaymentResponse.model_validate(inst) if inst else None
+        return NotificationResponse.model_validate(inst)
 
-    async def get_pending_by_id(self, payment_id: UUID) -> Payment | None:
-        """Return a PENDING payment by primary key, or None."""
-        return await Payment.get_or_none(id=payment_id, status=PaymentStatus.PENDING)
-
-    async def get_by_session(self, session_id: str) -> Payment | None:
-        """Return the raw model instance for internal webhook processing."""
-        return await Payment.get_or_none(stripe_session_id=session_id)
-
-    async def mark_paid(
-        self, session_id: str, payment_intent_id: str
-    ) -> Payment | None:
-        inst = await Payment.get_or_none(stripe_session_id=session_id)
-        if inst is None:
-            return None
-        inst.status = PaymentStatus.PAID
-        inst.stripe_payment_intent_id = payment_intent_id
-        await inst.save(
-            update_fields=["status", "stripe_payment_intent_id", "updated_at"]
-        )
-        return inst
-
-    async def mark_failed(self, session_id: str) -> Payment | None:
-        inst = await Payment.get_or_none(stripe_session_id=session_id)
-        if inst is None:
-            return None
-        inst.status = PaymentStatus.FAILED
-        await inst.save(update_fields=["status", "updated_at"])
-        return inst
-
-    async def mark_refunded(self, payment_intent_id: str) -> Payment | None:
-        inst = await Payment.get_or_none(
-            stripe_payment_intent_id=payment_intent_id,
-            status=PaymentStatus.PAID,
-        )
-        if inst is None:
-            return None
-        inst.status = PaymentStatus.REFUNDED
-        await inst.save(update_fields=["status", "updated_at"])
-        return inst
-
-    async def list_payments(
+    async def list_notifications(
         self,
         *,
         page: int = 1,
         page_size: int = 20,
-        user_id: UUID | None = None,
-    ) -> list[PaymentResponse]:
-        qs = Payment.all()
-        if user_id is not None:
-            qs = qs.filter(user_id=user_id)
+    ) -> list[NotificationResponse]:
         offset = (page - 1) * page_size
-        items = await qs.offset(offset).limit(page_size)
-        return [PaymentResponse.model_validate(p) for p in items]
-
-    async def delete_payment(self, payment_id: UUID) -> bool:
-        deleted = await Payment.filter(id=payment_id).delete()
-        return deleted > 0
+        items = await Notification.all().offset(offset).limit(page_size)
+        return [NotificationResponse.model_validate(n) for n in items]
 
 
-payment_crud = PaymentCRUD(Payment, PaymentResponse)
+notification_crud = NotificationCRUD(Notification, NotificationResponse)

@@ -4,32 +4,32 @@ from ms_core import AbstractModel as Model
 from tortoise import fields
 
 
-class PaymentStatus(StrEnum):
-    PENDING = "pending"  # Checkout Session created, awaiting customer payment
-    PAID = "paid"  # checkout.session.completed received
-    REFUNDED = "refunded"  # Full refund issued to customer
-    FAILED = "failed"  # Checkout Session expired without payment
+class NotificationChannel(StrEnum):
+    EMAIL = "email"
 
 
-class Payment(Model):
+class NotificationStatus(StrEnum):
+    SENT = "sent"
+    FAILED = "failed"
+
+
+class Notification(Model):
     id = fields.UUIDField(primary_key=True)
 
-    # Denormalized references to bookings-ms
-    booking_id = fields.UUIDField()  # allows multiple attempts per booking
-    user_id = fields.UUIDField()  # the customer who made the booking
-    venue_owner_id = fields.UUIDField()  # snapshot from booking at creation time
+    channel = fields.CharEnumField(
+        NotificationChannel, default=NotificationChannel.EMAIL
+    )
+    recipient = fields.CharField(max_length=255)  # email address
+    subject = fields.CharField(max_length=500)
+    template = fields.CharField(max_length=100)  # e.g. "booking_confirmed"
 
-    # Stripe identifiers
-    stripe_session_id = fields.CharField(max_length=255, unique=True)
-    stripe_payment_intent_id = fields.CharField(max_length=255, null=True)
+    status = fields.CharEnumField(NotificationStatus, default=NotificationStatus.SENT)
+    resend_id = fields.CharField(max_length=255, null=True)  # Resend message ID
+    error = fields.TextField(null=True)
 
-    # Monetary snapshot — always fetched from bookings-ms, never from the client
-    amount = fields.DecimalField(max_digits=10, decimal_places=2)
-    currency = fields.CharField(max_length=3, default="EUR")
-
-    status = fields.CharEnumField(PaymentStatus, default=PaymentStatus.PENDING)
-    updated_at = fields.DatetimeField(auto_now=True)
+    # Who/what triggered this notification
+    triggered_by = fields.CharField(max_length=100, null=True)  # e.g. "bookings-ms"
 
     class Meta:  # type: ignore
-        table = "payments"
+        table = "notifications"
         ordering = ["-created_at"]
