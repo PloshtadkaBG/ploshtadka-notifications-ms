@@ -10,11 +10,6 @@ from app.schemas import NotificationResponse, SendEmailRequest
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
-# ---------------------------------------------------------------------------
-# POST /notifications/send
-# ---------------------------------------------------------------------------
-
-
 @router.post(
     "/send",
     response_model=NotificationResponse,
@@ -63,11 +58,6 @@ async def send_email(payload: SendEmailRequest) -> NotificationResponse:
             error=str(exc),
             triggered_by=payload.triggered_by,
         )
-
-
-# ---------------------------------------------------------------------------
-# GET /notifications/
-# ---------------------------------------------------------------------------
 
 
 @router.get(
